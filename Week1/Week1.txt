@@ -1,0 +1,7 @@
+Week 1 — Game of Life
+Idea: Simple rules → wild patterns.
+Resource: Numberphile video on Game of Life — https://www.youtube.com/watch?v=R9Plq-D1gEk
+https://www.youtube.com/watch?v=Kk2MH9O4pXY 
+Watch both of these videos 
+Build: Game of Life in NumPy. Make it run. Try one rule tweak. Watch gliders fly.
+Ship: 30-second screen recording of your simulation running.

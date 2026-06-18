@@ -1,0 +1,26 @@
+Week 2  Neural Cellular Automata
+Goal
+
+Understand how a learned local update rule can grow and repair complex structures from a simple seed.
+
+resources : https://distill.pub/2020/growing-ca/ ,
+ https://www.youtube.com/watch?v=9Kec_7WFyp0 , 
+https://wandb.ai/johnowhitaker/nca/reports/Fun-With-Neural-Cellular-Automata--VmlldzoyMDQ5Mjg0 ,
+
+Task 1  Reproduce the Baseline (you already did it in week 1)
+
+Task 2  Analyze the Model (things to focus on : Input to the update network
+Output of the update network
+State tensor dimensions
+Number of hidden channels used
+Training objective) 
+
+Task 3 Growth Visualization
+Record the growth process from:
+Initial seed
+Intermediate stages
+Final image
+
+
+Task 4 : Damage and Recovery Experiment
+Introduce damage after growth.
