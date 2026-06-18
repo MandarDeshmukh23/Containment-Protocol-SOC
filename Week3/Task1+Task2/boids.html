@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boids Flocking Simulation</title>
+    <style>
+        body {
+            display: flex;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            gap: 20px;
+        }
+        canvas {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            flex-shrink: 0;
+        }
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 400px;
+            overflow-y: auto;
+            max-height: 600px;
+            padding-right: 10px;
+        }
+        .panel {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .panel h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+        .panel h3 {
+            font-size: 1rem;
+            color: #00ffcc;
+            margin-bottom: 5px;
+        }
+        .panel p {
+            font-size: 0.9rem;
+            line-height: 1.4;
+            color: #cccccc;
+            margin-top: 0;
+        }
+        .math {
+            background: #1e1e1e;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #00ffcc;
+            text-align: center;
+            margin: 10px 0;
+        }
+        label {
+            display: flex;
+            flex-direction: column;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        input[type="range"] {
+            margin-top: 8px;
+        }
+        span.val {
+            font-weight: normal;
+            color: #aaaaaa;
+        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e1e1e; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body>
+
+    <canvas id="boidsCanvas" width="800" height="600"></canvas>
+
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Simulation Controls</h2>
+            <label>Separation Weight: <span class="val" id="sepVal">1.5</span>
+                <input type="range" id="separation" min="0" max="5" step="0.1" value="1.5">
+            </label>
+            <label>Alignment Weight: <span class="val" id="aliVal">1.0</span>
+                <input type="range" id="alignment" min="0" max="5" step="0.1" value="1.0">
+            </label>
+            <label>Cohesion Weight: <span class="val" id="cohVal">1.0</span>
+                <input type="range" id="cohesion" min="0" max="5" step="0.1" value="1.0">
+            </label>
+            <label>Perception Radius: <span class="val" id="radVal">50</span>
+                <input type="range" id="radius" min="10" max="200" step="1" value="50">
+            </label>
+        </div>
+
+        <div class="panel">
+            <h2>Mathematical Model</h2>
+            
+            <h3>Separation</h3>
+            <p>Steers the boid away from local flockmates to prevent collisions. The force is the sum of vectors pointing away from neighbors, weighted inversely by distance to prioritize immediate threats.</p>
+            <div class="math">F_sep = Σ (p_i - p_j) / ||p_i - p_j||²</div>
+            
+            <h3>Alignment</h3>
+            <p>Steers the boid towards the average heading (velocity) of its local flockmates, keeping the flock moving in a unified direction.</p>
+            <div class="math">F_ali = (Average Velocity) - v_i</div>
+
+            <h3>Cohesion</h3>
+            <p>Steers the boid towards the average position (center of mass) of its local flockmates, keeping the group clumped together.</p>
+            <div class="math">F_coh = (Average Position) - p_i</div>
+
+            <h3>Perception Radius</h3>
+            <p>Defines the local neighborhood space. For any given boid, only other boids that fall within this Euclidean distance are factored into the calculations above.</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('boidsCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const params = {
+            separation: 1.5, alignment: 1.0, cohesion: 1.0, radius: 50,
+            maxSpeed: 4, maxForce: 0.1
+        };
+
+        ['separation', 'alignment', 'cohesion', 'radius'].forEach(id => {
+            const el = document.getElementById(id);
+            const valSpan = document.getElementById(id === 'radius' ? 'radVal' : id.substring(0, 3) + 'Val');
+            el.addEventListener('input', (e) => {
+                params[id] = parseFloat(e.target.value);
+                valSpan.textContent = e.target.value;
+            });
+        });
+
+        class Vec2 {
+            constructor(x, y) { this.x = x; this.y = y; }
+            add(v) { this.x += v.x; this.y += v.y; return this; }
+            sub(v) { this.x -= v.x; this.y -= v.y; return this; }
+            mult(n) { this.x *= n; this.y *= n; return this; }
+            div(n) { this.x /= n; this.y /= n; return this; }
+            mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            setMag(n) { this.normalize().mult(n); return this; }
+            normalize() { const m = this.mag(); if (m > 0) this.div(m); return this; }
+            limit(max) { if (this.mag() > max) this.setMag(max); return this; }
+            dist(v) { return Math.sqrt((this.x - v.x) ** 2 + (this.y - v.y) ** 2); }
+            copy() { return new Vec2(this.x, this.y); }
+        }
+
+        class Boid {
+            constructor() {
+                this.pos = new Vec2(Math.random() * canvas.width, Math.random() * canvas.height);
+                this.vel = new Vec2((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10).setMag(params.maxSpeed);
+                this.acc = new Vec2(0, 0);
+            }
+
+            edges() {
+                if (this.pos.x > canvas.width) this.pos.x = 0;
+                else if (this.pos.x < 0) this.pos.x = canvas.width;
+                if (this.pos.y > canvas.height) this.pos.y = 0;
+                else if (this.pos.y < 0) this.pos.y = canvas.height;
+            }
+
+            applyBehaviors(boids) {
+                let alignment = new Vec2(0, 0);
+                let cohesion = new Vec2(0, 0);
+                let separation = new Vec2(0, 0);
+                let total = 0;
+
+                for (let other of boids) {
+                    let d = this.pos.dist(other.pos);
+                    if (other !== this && d < params.radius) {
+                        alignment.add(other.vel);
+                        cohesion.add(other.pos);
+                        
+                        let diff = this.pos.copy().sub(other.pos);
+                        if (d > 0) diff.div(d); 
+                        separation.add(diff);
+                        total++;
+                    }
+                }
+
+                if (total > 0) {
+                    alignment.div(total).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                    cohesion.div(total).sub(this.pos).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                    separation.div(total).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                }
+
+                this.acc.add(separation.mult(params.separation));
+                this.acc.add(alignment.mult(params.alignment));
+                this.acc.add(cohesion.mult(params.cohesion));
+            }
+
+            update() {
+                this.pos.add(this.vel);
+                this.vel.add(this.acc).limit(params.maxSpeed);
+                this.acc.mult(0);
+            }
+
+            draw() {
+                const theta = Math.atan2(this.vel.y, this.vel.x);
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(theta);
+                ctx.beginPath();
+                ctx.moveTo(8, 0);
+                ctx.lineTo(-4, 4);
+                ctx.lineTo(-4, -4);
+                ctx.closePath();
+                ctx.fillStyle = '#00ffcc';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        const flock = Array.from({ length: 150 }, () => new Boid());
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let boid of flock) {
+                boid.applyBehaviors(flock);
+                boid.update();
+                boid.edges();
+                boid.draw();
+            }
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

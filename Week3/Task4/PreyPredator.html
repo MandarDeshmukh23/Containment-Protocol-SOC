@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boids - Task 4: Predator and Prey</title>
+    <style>
+        body {
+            display: flex;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            gap: 20px;
+        }
+        canvas {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            flex-shrink: 0;
+        }
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 400px;
+            overflow-y: auto;
+            max-height: 600px;
+            padding-right: 10px;
+        }
+        .panel {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .panel h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+        label {
+            display: flex;
+            flex-direction: column;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        input[type="range"] {
+            margin-top: 8px;
+        }
+        span.val {
+            font-weight: normal;
+            color: #aaaaaa;
+        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e1e1e; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <canvas id="boidsCanvas" width="800" height="600"></canvas>
+
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Simulation Controls</h2>
+            <label>Chase Strength (Predator): <span class="val" id="chaVal">3.0</span>
+                <input type="range" id="chase" min="0" max="10" step="0.5" value="3.0">
+            </label>
+            <label>Flee Strength (Prey): <span class="val" id="fleVal">5.0</span>
+                <input type="range" id="flee" min="0" max="10" step="0.5" value="5.0">
+            </label>
+            <label>Separation Weight: <span class="val" id="sepVal">1.5</span>
+                <input type="range" id="separation" min="0" max="5" step="0.1" value="1.5">
+            </label>
+            <label>Alignment Weight: <span class="val" id="aliVal">1.0</span>
+                <input type="range" id="alignment" min="0" max="5" step="0.1" value="1.0">
+            </label>
+            <label>Cohesion Weight: <span class="val" id="cohVal">1.0</span>
+                <input type="range" id="cohesion" min="0" max="5" step="0.1" value="1.0">
+            </label>
+            <label>Perception Radius: <span class="val" id="radVal">50</span>
+                <input type="range" id="radius" min="10" max="200" step="1" value="50">
+            </label>
+        </div>
+        
+        <div class="panel">
+            <h2>Observation Tips</h2>
+            <p>Observe the "Splitting and Merging" behavior. When a predator (red) dives into a stable flock, the prey (cyan) should violently fragment into smaller sub-flocks to escape. Once the predator passes, watch how the local cohesion rule naturally pulls the fragmented groups back into a unified flock.</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('boidsCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const params = {
+            separation: 1.5, alignment: 1.0, cohesion: 1.0, radius: 50, 
+            chase: 3.0, flee: 5.0,
+            maxSpeedPrey: 4.0, maxForcePrey: 0.1,
+            maxSpeedPredator: 4.5, maxForcePredator: 0.15
+        };
+
+        ['separation', 'alignment', 'cohesion', 'radius', 'chase', 'flee'].forEach(id => {
+            const el = document.getElementById(id);
+            const valSpan = document.getElementById(id.substring(0, 3) + 'Val');
+            el.addEventListener('input', (e) => {
+                params[id] = parseFloat(e.target.value);
+                valSpan.textContent = e.target.value;
+            });
+        });
+
+        class Vec2 {
+            constructor(x, y) { this.x = x; this.y = y; }
+            add(v) { this.x += v.x; this.y += v.y; return this; }
+            sub(v) { this.x -= v.x; this.y -= v.y; return this; }
+            mult(n) { this.x *= n; this.y *= n; return this; }
+            div(n) { this.x /= n; this.y /= n; return this; }
+            mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            setMag(n) { this.normalize().mult(n); return this; }
+            normalize() { const m = this.mag(); if (m > 0) this.div(m); return this; }
+            limit(max) { if (this.mag() > max) this.setMag(max); return this; }
+            dist(v) { return Math.sqrt((this.x - v.x) ** 2 + (this.y - v.y) ** 2); }
+            copy() { return new Vec2(this.x, this.y); }
+        }
+
+        class Agent {
+            constructor(isPredator) {
+                this.isPredator = isPredator;
+                this.pos = new Vec2(Math.random() * canvas.width, Math.random() * canvas.height);
+                
+                let speed = isPredator ? params.maxSpeedPredator : params.maxSpeedPrey;
+                this.vel = new Vec2((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10).setMag(speed);
+                this.acc = new Vec2(0, 0);
+            }
+
+            edges() {
+                if (this.pos.x > canvas.width + 20) this.pos.x = -20;
+                else if (this.pos.x < -20) this.pos.x = canvas.width + 20;
+                if (this.pos.y > canvas.height + 20) this.pos.y = -20;
+                else if (this.pos.y < -20) this.pos.y = canvas.height + 20;
+            }
+
+            applyBehaviors(agents) {
+                if (this.isPredator) {
+                    this.predatorBehavior(agents);
+                } else {
+                    this.preyBehavior(agents);
+                }
+            }
+
+            predatorBehavior(agents) {
+                let chaseForce = new Vec2(0, 0);
+                let closestDist = Infinity;
+                let closestPrey = null;
+
+                // Predators look for the closest prey within a larger radius
+                for (let other of agents) {
+                    if (!other.isPredator) {
+                        let d = this.pos.dist(other.pos);
+                        if (d < params.radius * 3 && d < closestDist) {
+                            closestDist = d;
+                            closestPrey = other;
+                        }
+                    }
+                }
+
+                if (closestPrey) {
+                    chaseForce = closestPrey.pos.copy().sub(this.pos);
+                    chaseForce.setMag(params.maxSpeedPredator).sub(this.vel).limit(params.maxForcePredator);
+                }
+
+                this.acc.add(chaseForce.mult(params.chase));
+            }
+
+            preyBehavior(agents) {
+                let alignment = new Vec2(0, 0);
+                let cohesion = new Vec2(0, 0);
+                let separation = new Vec2(0, 0);
+                let fleeForce = new Vec2(0, 0);
+                let total = 0;
+
+                for (let other of agents) {
+                    let d = this.pos.dist(other.pos);
+                    
+                    if (other !== this) {
+                        if (other.isPredator) {
+                            // Flee from predators (prey notice predators from further away)
+                            if (d < params.radius * 2) {
+                                let diff = this.pos.copy().sub(other.pos);
+                                if (d > 0) diff.div(d); // Stronger near the predator
+                                fleeForce.add(diff);
+                            }
+                        } else if (d < params.radius) {
+                            // Standard flocking with other prey
+                            alignment.add(other.vel);
+                            cohesion.add(other.pos);
+                            
+                            let diff = this.pos.copy().sub(other.pos);
+                            if (d > 0) diff.div(d); 
+                            separation.add(diff);
+                            total++;
+                        }
+                    }
+                }
+
+                if (total > 0) {
+                    alignment.div(total).setMag(params.maxSpeedPrey).sub(this.vel).limit(params.maxForcePrey);
+                    cohesion.div(total).sub(this.pos).setMag(params.maxSpeedPrey).sub(this.vel).limit(params.maxForcePrey);
+                    separation.div(total).setMag(params.maxSpeedPrey).sub(this.vel).limit(params.maxForcePrey);
+                }
+
+                if (fleeForce.mag() > 0) {
+                    fleeForce.setMag(params.maxSpeedPrey).sub(this.vel).limit(params.maxForcePrey * 2);
+                }
+
+                this.acc.add(separation.mult(params.separation));
+                this.acc.add(alignment.mult(params.alignment));
+                this.acc.add(cohesion.mult(params.cohesion));
+                this.acc.add(fleeForce.mult(params.flee));
+            }
+
+            update() {
+                let maxS = this.isPredator ? params.maxSpeedPredator : params.maxSpeedPrey;
+                this.pos.add(this.vel);
+                this.vel.add(this.acc).limit(maxS);
+                this.acc.mult(0);
+            }
+
+            draw() {
+                const theta = Math.atan2(this.vel.y, this.vel.x);
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(theta);
+                ctx.beginPath();
+                
+                if (this.isPredator) {
+                    // Make predators slightly larger and sharper
+                    ctx.moveTo(12, 0);
+                    ctx.lineTo(-6, 6);
+                    ctx.lineTo(-6, -6);
+                    ctx.fillStyle = '#ff3333';
+                } else {
+                    ctx.moveTo(8, 0);
+                    ctx.lineTo(-4, 4);
+                    ctx.lineTo(-4, -4);
+                    ctx.fillStyle = '#00ffcc';
+                }
+                
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // Initialize 150 Prey and 3 Predators
+        const population = [];
+        for (let i = 0; i < 150; i++) population.push(new Agent(false));
+        for (let i = 0; i < 3; i++) population.push(new Agent(true));
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            for (let agent of population) {
+                agent.applyBehaviors(population);
+                agent.update();
+                agent.edges();
+                agent.draw();
+            }
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
