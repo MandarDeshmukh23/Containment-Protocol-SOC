@@ -4,17 +4,17 @@ from matplotlib.animation import FuncAnimation
 
 N = 50
 
-# grid = np.random.choice([0, 1], size=(N, N), p=[0.8, 0.2])
+grid = np.random.choice([0, 1], size=(N, N), p=[0.8, 0.2])
 
-grid = np.zeros((50, 50), dtype=int)
+# grid = np.zeros((50, 50), dtype=int)
 
-glider = np.array([
-    [0,1,0],
-    [0,0,1],
-    [1,1,1]
-])
+# glider = np.array([
+#     [0,1,0],
+#     [0,0,1],
+#     [1,1,1]
+# ])
 
-grid[10:13,10:13] = glider
+# grid[10:13,10:13] = glider
 
 
 def count_neighbors(grid):
