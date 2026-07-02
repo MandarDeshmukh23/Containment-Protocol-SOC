@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boids - Task 3: Advanced Obstacles & FOV</title>
+    <style>
+        body { display: flex; font-family: 'Segoe UI', sans-serif; background-color: #1e1e1e; color: #ffffff; margin: 0; padding: 20px; gap: 20px; }
+        canvas { background-color: #2d2d2d; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); flex-shrink: 0; }
+        .sidebar { display: flex; flex-direction: column; gap: 20px; max-width: 400px; }
+        .panel { background: #2d2d2d; padding: 20px; border-radius: 8px; }
+        .panel h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        label { display: flex; flex-direction: column; font-size: 14px; font-weight: bold; margin-bottom: 15px; }
+        span.val { font-weight: normal; color: #aaaaaa; }
+    </style>
+</head>
+<body>
+    <canvas id="boidsCanvas" width="800" height="600"></canvas>
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Simulation Controls</h2>
+            <label>Field of View (Degrees): <span class="val" id="fovVal">270</span>
+                <input type="range" id="fov" min="90" max="360" step="10" value="270">
+            </label>
+            <label>Look-Ahead Distance: <span class="val" id="looVal">60</span>
+                <input type="range" id="lookAhead" min="20" max="150" step="5" value="60">
+            </label>
+            <label>Avoidance Strength: <span class="val" id="avoVal">5.0</span>
+                <input type="range" id="avoidance" min="0" max="10" step="0.5" value="5.0">
+            </label>
+            <label>Separation Weight: <span class="val" id="sepVal">1.5</span>
+                <input type="range" id="separation" min="0" max="5" step="0.1" value="1.5">
+            </label>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('boidsCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const params = { separation: 1.5, alignment: 1.0, cohesion: 1.0, radius: 50, avoidance: 5.0, fov: 270, lookAhead: 60, maxSpeed: 4, maxForce: 0.1 };
+
+        ['fov', 'lookAhead', 'avoidance', 'separation'].forEach(id => {
+            const el = document.getElementById(id);
+            const valSpan = document.getElementById(id.substring(0, 3) + 'Val');
+            el.addEventListener('input', (e) => {
+                params[id] = parseFloat(e.target.value);
+                valSpan.textContent = e.target.value;
+            });
+        });
+
+        const obstacles = [
+            { type: 'circle', pos: { x: canvas.width / 2, y: canvas.height / 2 }, radius: 80 },
+            { type: 'rect', x: 150, y: 150, w: 40, h: 300 },
+            { type: 'rect', x: 610, y: 150, w: 40, h: 300 }
+        ];
+
+        class Vec2 {
+            constructor(x, y) { this.x = x; this.y = y; }
+            add(v) { this.x += v.x; this.y += v.y; return this; }
+            sub(v) { this.x -= v.x; this.y -= v.y; return this; }
+            mult(n) { this.x *= n; this.y *= n; return this; }
+            div(n) { this.x /= n; this.y /= n; return this; }
+            mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            setMag(n) { this.normalize().mult(n); return this; }
+            normalize() { const m = this.mag(); if (m > 0) this.div(m); return this; }
+            limit(max) { if (this.mag() > max) this.setMag(max); return this; }
+            dist(v) { return Math.sqrt((this.x - v.x) ** 2 + (this.y - v.y) ** 2); }
+            copy() { return new Vec2(this.x, this.y); }
+            dot(v) { return this.x * v.x + this.y * v.y; } // Needed for FOV calculation
+        }
+
+        function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+        class Boid {
+            constructor() {
+                this.pos = new Vec2(Math.random() * canvas.width, Math.random() * canvas.height);
+                this.vel = new Vec2((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10).setMag(params.maxSpeed);
+                this.acc = new Vec2(0, 0);
+            }
+
+            edges() {
+                if (this.pos.x > canvas.width) this.pos.x = 0; else if (this.pos.x < 0) this.pos.x = canvas.width;
+                if (this.pos.y > canvas.height) this.pos.y = 0; else if (this.pos.y < 0) this.pos.y = canvas.height;
+            }
+
+            applyBehaviors(boids) {
+                let alignment = new Vec2(0, 0), cohesion = new Vec2(0, 0), separation = new Vec2(0, 0);
+                let total = 0;
+
+                // FOV Calculation Limit
+                let fovRadians = (params.fov / 2) * (Math.PI / 180);
+                let fovThreshold = Math.cos(fovRadians);
+
+                for (let other of boids) {
+                    let diff = this.pos.copy().sub(other.pos);
+                    let d = diff.mag();
+                    if (other !== this && d < params.radius) {
+                        // Normalize velocity and diff for dot product
+                        let velNorm = this.vel.copy().normalize();
+                        let dirToOther = other.pos.copy().sub(this.pos).normalize();
+                        
+                        // Check if neighbor is within FOV
+                        if (velNorm.dot(dirToOther) > fovThreshold) {
+                            alignment.add(other.vel);
+                            cohesion.add(other.pos);
+                            if (d > 0) diff.div(d); 
+                            separation.add(diff);
+                            total++;
+                        }
+                    }
+                }
+
+                if (total > 0) {
+                    alignment.div(total).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                    cohesion.div(total).sub(this.pos).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                    separation.div(total).setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce);
+                }
+
+                // Look-Ahead Obstacle Avoidance (Raycasting logic)
+                let avoidanceForce = new Vec2(0, 0);
+                let ahead = this.pos.copy().add(this.vel.copy().normalize().mult(params.lookAhead));
+                
+                for (let obs of obstacles) {
+                    let closest = new Vec2(0, 0);
+                    let padding = 15;
+                    
+                    if (obs.type === 'circle') {
+                        closest = new Vec2(obs.pos.x, obs.pos.y);
+                        if (ahead.dist(closest) < obs.radius + padding) {
+                            avoidanceForce.add(ahead.copy().sub(closest).normalize().mult(params.maxSpeed));
+                        }
+                    } else if (obs.type === 'rect') {
+                        closest.x = clamp(ahead.x, obs.x, obs.x + obs.w);
+                        closest.y = clamp(ahead.y, obs.y, obs.y + obs.h);
+                        if (ahead.dist(closest) < padding) {
+                            avoidanceForce.add(ahead.copy().sub(closest).normalize().mult(params.maxSpeed));
+                        }
+                    }
+                }
+
+                if (avoidanceForce.mag() > 0) {
+                    avoidanceForce.setMag(params.maxSpeed).sub(this.vel).limit(params.maxForce * 3);
+                }
+
+                this.acc.add(separation.mult(params.separation));
+                this.acc.add(alignment.mult(params.alignment));
+                this.acc.add(cohesion.mult(params.cohesion));
+                this.acc.add(avoidanceForce.mult(params.avoidance));
+            }
+
+            update() { this.pos.add(this.vel); this.vel.add(this.acc).limit(params.maxSpeed); this.acc.mult(0); }
+
+            draw() {
+                const theta = Math.atan2(this.vel.y, this.vel.x);
+                ctx.save(); ctx.translate(this.pos.x, this.pos.y); ctx.rotate(theta);
+                ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-4, 4); ctx.lineTo(-4, -4); ctx.closePath();
+                ctx.fillStyle = '#00ffcc'; ctx.fill(); ctx.restore();
+            }
+        }
+
+        const flock = Array.from({ length: 150 }, () => new Boid());
+
+        function drawObstacles() {
+            for (let obs of obstacles) {
+                ctx.fillStyle = 'rgba(255, 50, 50, 0.3)'; ctx.strokeStyle = 'rgba(255, 50, 50, 0.8)'; ctx.lineWidth = 2;
+                ctx.beginPath();
+                if (obs.type === 'circle') ctx.arc(obs.pos.x, obs.pos.y, obs.radius, 0, Math.PI * 2);
+                else if (obs.type === 'rect') ctx.rect(obs.x, obs.y, obs.w, obs.h);
+                ctx.fill(); ctx.stroke(); ctx.closePath();
+            }
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawObstacles();
+            for (let boid of flock) { boid.applyBehaviors(flock); boid.update(); boid.edges(); boid.draw(); }
+            requestAnimationFrame(animate);
+        }
+        animate();
+    </script>
+</body>
+</html>
